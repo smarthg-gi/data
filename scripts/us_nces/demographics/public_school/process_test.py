@@ -14,6 +14,7 @@
 
 import os
 import unittest
+from unittest.mock import patch
 import sys
 import tempfile
 # module_dir is the path to where this test is running from.
@@ -62,9 +63,14 @@ class TestProcess(unittest.TestCase):
                                       csv_path_place, dup_csv_path_place,
                                       tmcf_path_place)
 
-            loader.generate_csv()
-            loader.generate_mcf()
-            loader.generate_tmcf()
+            with patch(
+                    "common.us_education.dc_api_is_defined_dcid",
+                    side_effect=lambda nodes, *args, **kwargs:
+                {n: True for n in nodes},
+            ):
+                loader.generate_csv()
+                loader.generate_mcf()
+                loader.generate_tmcf()
 
             with open(cleaned_csv_file_path, encoding="utf-8-sig") as csv_file:
                 self.actual_csv_data = csv_file.read()
