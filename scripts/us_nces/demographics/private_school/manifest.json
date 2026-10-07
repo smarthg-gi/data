@@ -5,7 +5,7 @@
             "curator_emails": [
                 "support@datacommons.org"
             ],
-            "provenance_url": "https://nces.ed.gov/surveys/pss/pssdata.asp",
+            "provenance_url": "https://nces.ed.gov/surveys/pss",
             "provenance_description": "US nces school data for private",
             "scripts": [
                 "download.py",
@@ -32,7 +32,7 @@
             "curator_emails": [
                 "support@datacommons.org"
             ],
-            "provenance_url": "https://nces.ed.gov/surveys/pss/pssdata.asp",
+            "provenance_url": "https://nces.ed.gov/surveys/pss",
             "provenance_description": "US nces school data for private stats",
             "scripts": [
                 "download.py",
