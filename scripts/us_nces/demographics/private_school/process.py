@@ -542,7 +542,6 @@ def main(argv):
     except Exception as e:
         logging.fatal(f"Error While Running Private School Process: {e}",
                       exc_info=True)
-        raise
 
 
 if __name__ == '__main__':

@@ -86,6 +86,15 @@ def _download_and_extract_pss_zip(session: requests.Session, zip_url: str,
 
     os.makedirs(extract_dir, exist_ok=True)
 
+    # Clean out any stale legacy ELSI exports seeded from previous production runs.
+    for existing_file in os.listdir(extract_dir):
+        if existing_file.lower().startswith("elsi_"):
+            try:
+                os.remove(os.path.join(extract_dir, existing_file))
+                logging.info("Removed stale legacy export: %s", existing_file)
+            except OSError as e:
+                logging.warning("Could not remove %s: %s", existing_file, e)
+
     extracted_files = []
     with zipfile.ZipFile(io.BytesIO(res.content)) as zf:
         for member in zf.namelist():
