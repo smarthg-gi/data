@@ -54,7 +54,7 @@ def retry_call(func, *args, **kwargs):
             if attempt == MAX_RETRIES:
                 logging.error("Failed after %d attempts: %s", attempt, exc)
                 raise
-            sleep_time = RETRY_SLEEP_SECS * attempt
+            sleep_time = RETRY_SLEEP_SECS * (2**(attempt - 1))
             logging.warning(
                 "Attempt %d/%d failed with %s; sleeping %ds before retry...",
                 attempt,
@@ -67,7 +67,7 @@ def retry_call(func, *args, **kwargs):
             if attempt == MAX_RETRIES:
                 logging.error("Failed after %d attempts: %s", attempt, exc)
                 raise
-            sleep_time = RETRY_SLEEP_SECS * attempt
+            sleep_time = RETRY_SLEEP_SECS * (2**(attempt - 1))
             logging.warning(
                 "Attempt %d/%d failed with %s; sleeping %ds before retry...",
                 attempt,
@@ -81,14 +81,12 @@ def retry_call(func, *args, **kwargs):
 def _download_and_extract_pss_zip(session: requests.Session, zip_url: str,
                                   extract_dir: str) -> None:
     """Downloads PSS public ZIP archive and extracts CSV/TXT data as CSV."""
-    try:
-        res = session.get(zip_url, timeout=(10, 120))
-        res.raise_for_status()
-    except requests.RequestException as exc:
-        logging.error("Failed to download %s: %s", zip_url, exc)
-        raise RuntimeError(f"Download aborted for {zip_url}") from exc
+    res = session.get(zip_url, timeout=(10, 120))
+    res.raise_for_status()
 
     os.makedirs(extract_dir, exist_ok=True)
+
+    extracted_files = []
     with zipfile.ZipFile(io.BytesIO(res.content)) as zf:
         for member in zf.namelist():
             filename = os.path.basename(member)
@@ -101,44 +99,52 @@ def _download_and_extract_pss_zip(session: requests.Session, zip_url: str,
                 with zf.open(member) as src, open(temp_path, "wb") as dst:
                     shutil.copyfileobj(src, dst)
                 os.replace(temp_path, target_path)
+                if os.path.getsize(target_path) > 0:
+                    extracted_files.append(target_path)
                 logging.info("Extracted PSS CSV to: %s", target_path)
             elif lower_name.endswith(".txt"):
                 stem = os.path.splitext(filename)[0]
                 target_path = os.path.join(extract_dir, f"{stem}.csv")
                 temp_path = target_path + ".tmp"
                 with zf.open(member) as raw_src:
-                    text_stream = io.TextIOWrapper(
-                        raw_src, encoding="ISO-8859-1")
+                    text_stream = io.TextIOWrapper(raw_src,
+                                                   encoding="ISO-8859-1")
                     reader = csv.reader(text_stream, delimiter="\t")
-                    with open(
-                        temp_path, "w", newline="", encoding="utf-8") as dst:
+                    with open(temp_path, "w", newline="",
+                              encoding="utf-8") as dst:
                         writer = csv.writer(dst)
                         writer.writerows(reader)
                 os.replace(temp_path, target_path)
-                logging.info(
-                    "Converted tab-delimited PSS TXT to CSV: %s", target_path)
+                if os.path.getsize(target_path) > 0:
+                    extracted_files.append(target_path)
+                logging.info("Converted tab-delimited PSS TXT to CSV: %s",
+                             target_path)
+
+    if not extracted_files:
+        raise RuntimeError(
+            f"No valid non-empty CSV/TXT files were extracted from {zip_url} into {extract_dir}"
+        )
 
 
 def download_pss_private_school_files() -> None:
     """Downloads PSS public-use data files from official portal."""
     logging.info("Fetching PSS data page: %s", PSS_DATA_PAGE_URL)
     with requests.Session() as session:
-        try:
-            response = retry_call(
-                session.get, PSS_DATA_PAGE_URL, timeout=(10, 60))
-            response.raise_for_status()
-        except requests.RequestException as exc:
-            logging.error("Failed to fetch %s: %s", PSS_DATA_PAGE_URL, exc)
-            raise RuntimeError(
-                f"Download aborted for {PSS_DATA_PAGE_URL}") from exc
+
+        def _fetch_page(url: str) -> requests.Response:
+            resp = session.get(url, timeout=(10, 60))
+            resp.raise_for_status()
+            return resp
+
+        response = retry_call(_fetch_page, PSS_DATA_PAGE_URL)
 
         soup = BeautifulSoup(response.text, "html.parser")
 
-        # Map start_year -> (full_zip_url, set_of_accepted_year_aliases)
-        year_to_info = {}
+        # Map start_year -> full_zip_url
+        year_to_url = {}
         zip_patterns = [
-            re.compile(
-                r"zip/pss(\d{2})(\d{2})_pu_(?:csv|txt)\.zip$", re.IGNORECASE),
+            re.compile(r"zip/pss(\d{2})(\d{2})_pu_(?:csv|txt)\.zip$",
+                       re.IGNORECASE),
             re.compile(r"zip/TXT_PSS(\d{2})(\d{2})\.zip$", re.IGNORECASE),
         ]
         for a_tag in soup.find_all("a", href=True):
@@ -146,32 +152,28 @@ def download_pss_private_school_files() -> None:
             for pat in zip_patterns:
                 match = pat.search(href)
                 if match:
-                    yy1, yy2 = match.group(1), match.group(2)
+                    yy1 = match.group(1)
                     century = "19" if int(yy1) >= 80 else "20"
                     start_year = f"{century}{yy1}"
-                    end_year = str(int(start_year) + 1)
-                    aliases = {
-                        start_year,
-                        end_year,
-                        f"{yy1}{yy2}",
-                        f"{start_year}-{yy2}",
-                        f"{start_year}-{end_year}",
-                    }
                     full_url = urllib.parse.urljoin(PSS_BASE_URL, href)
-                    year_to_info[start_year] = (full_url, aliases)
+                    year_to_url[start_year] = full_url
                     break
 
-        target_years = sorted(
-            [y for y in year_to_info.keys() if int(y) >= 1997])
+        target_years = sorted([y for y in year_to_url.keys() if int(y) >= 1997])
+
+        if not target_years:
+            raise RuntimeError(
+                f"Failed to find any PSS survey ZIP links on {PSS_DATA_PAGE_URL}. "
+                "The page structure or link URLs may have changed.")
 
         for start_year in target_years:
-            zip_url, _ = year_to_info[start_year]
-            extract_dir = os.path.join(
-                _SCRIPT_DIR, "gcs_folder", "input_files", start_year)
-            logging.info(
-                "Downloading PSS data for year %s from %s", start_year, zip_url)
-            retry_call(
-                _download_and_extract_pss_zip, session, zip_url, extract_dir)
+            zip_url = year_to_url[start_year]
+            extract_dir = os.path.join(_SCRIPT_DIR, "gcs_folder", "input_files",
+                                       start_year)
+            logging.info("Downloading PSS data for year %s from %s", start_year,
+                         zip_url)
+            retry_call(_download_and_extract_pss_zip, session, zip_url,
+                       extract_dir)
 
 
 def main(argv):

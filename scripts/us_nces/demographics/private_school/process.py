@@ -36,7 +36,34 @@ warnings.simplefilter(action='ignore', category=DeprecationWarning)
 MODULE_DIR = os.path.dirname(__file__)
 sys.path.insert(1, MODULE_DIR + '/../..')
 from common.us_education import USEducation
-from config import *
+from config import (
+    CSV_DUPLICATE_NAME,
+    CSV_FILE_NAME,
+    CSV_FILE_PLACE,
+    DROP_BY_VALUE,
+    ELSI_58_COLUMN_TEMPLATE,
+    EXCLUDE_DATA_COLUMNS,
+    EXCLUDE_LIST,
+    EXCLUDE_PLACE_COLUMNS,
+    MCF_FILE_NAME,
+    OBSERVATION_PERIOD,
+    POSSIBLE_DATA_COLUMNS,
+    POSSIBLE_PLACE_COLUMNS,
+    PSS_COED_MAP,
+    PSS_COLUMN_ALIASES,
+    PSS_COMM_TYPE_MAP,
+    PSS_GRADE_CODE_MAP,
+    PSS_ORIENT_MAP,
+    PSS_RELIG_AFFIL_MAP,
+    PSS_SCHOOL_LEVEL_MAP,
+    PSS_SCHOOL_TYPE_MAP,
+    PSS_STATE_FIPS_TO_NAME,
+    RENAMING_PRIVATE_COLUMNS,
+    SCHOOL_TYPE,
+    SPLIT_HEADER_ON_SCHOOL_TYPE,
+    TMCF_FILE_NAME,
+    TMCF_FILE_PLACE,
+)
 
 FLAGS = flags.FLAGS
 flags.DEFINE_enum(
@@ -79,6 +106,9 @@ class NCESPrivateSchool(USEducation):
     def set_generate_statvars_flag(self, flag: bool):
         self._generate_statvars = flag
 
+    def set_generate_places_flag(self, flag: bool):
+        self._generate_places = flag
+
     @staticmethod
     def _map_code_col(series: pd.Series, code_map: dict) -> pd.Series:
         """Maps integer code strings (including zero-padded '01'-'09') to labels."""
@@ -115,8 +145,7 @@ class NCESPrivateSchool(USEducation):
                     o_offered | c_valid,
                     c_num.clip(lower=0).fillna(0).round().astype(np.int64),
                     0,
-                )
-            )
+                ))
         any_offered = np.logical_or.reduce(offered_masks)
         total = sum(item_counts)
         total_str = pd.Series(total, index=df.index).astype(str)
@@ -133,20 +162,30 @@ class NCESPrivateSchool(USEducation):
         raw_str = df[count_col].str.strip()
         num = pd.to_numeric(raw_str, errors="coerce")
         is_missing = (raw_str == "") | num.isna() | (num < 0)
-        int_str = num.clip(lower=0).fillna(0).round().astype(np.int64).astype(str)
+        int_str = num.clip(lower=0).fillna(0).round().astype(
+            np.int64).astype(str)
         return pd.Series(
             np.where(is_missing, "†", int_str),
             index=df.index,
         )
 
     @staticmethod
-    def _format_float_col(df: pd.DataFrame, val_col: str) -> pd.Series:
-        """Formats a float percentage/ratio column rounded to 2 decimals."""
+    def _format_float_col(df: pd.DataFrame,
+                          val_col: str,
+                          is_percentage: bool = False) -> pd.Series:
+        """Formats a float percentage/ratio column rounded to 2 decimals.
+
+        If is_percentage is True, values > 100.0 are treated as invalid/missing ("†")
+        to protect against upstream NCES denominator anomalies where race counts included
+        pre-K students but total enrollment excluded them.
+        """
         if val_col not in df.columns:
             return pd.Series("†", index=df.index)
         raw_str = df[val_col].str.strip()
         num = pd.to_numeric(raw_str, errors="coerce")
         is_missing = (raw_str == "") | num.isna() | (num < 0)
+        if is_percentage:
+            is_missing = is_missing | (num > 100.0)
         num_str = num.round(2).astype(str)
         return pd.Series(
             np.where(is_missing, "†", num_str),
@@ -182,12 +221,14 @@ class NCESPrivateSchool(USEducation):
                     df[canonical_col] = ""
 
         # Compute p_black in survey cycles (1997-2015) where p325 and numstuds
-        # exist without a pre-computed p_black column.
+        # exist without a pre-computed p_black column. Validate p325 <= numstuds
+        # to prevent invalid percentages (> 100%) when pre-K counts exceed K-12.
         if "p_black" not in df.columns and "p325" in df.columns:
             p325_num = pd.to_numeric(df["p325"].str.strip(), errors="coerce")
             numstuds_num = pd.to_numeric(df["numstuds"].str.strip(),
                                          errors="coerce")
-            valid_ratio = (numstuds_num > 0) & p325_num.notna()
+            valid_ratio = ((numstuds_num > 0) & p325_num.notna() &
+                           (p325_num <= numstuds_num))
             df["p_black"] = np.where(
                 valid_ratio,
                 ((p325_num / numstuds_num) * 100.0).astype(str),
@@ -243,7 +284,8 @@ class NCESPrivateSchool(USEducation):
                                                             regex=False)
         raw_zip4 = df["pzip4"].str.strip()
         pzip = pd.Series(
-            np.where(raw_zip_digits != "", raw_zip_digits.str[:5].str.zfill(5), ""),
+            np.where(raw_zip_digits != "", raw_zip_digits.str[:5].str.zfill(5),
+                     ""),
             index=df.index,
         )
         zip_plus_4 = pd.Series(
@@ -253,7 +295,8 @@ class NCESPrivateSchool(USEducation):
                 np.where(
                     raw_zip4 != "",
                     pzip + raw_zip4.str.zfill(4),
-                    np.where(raw_zip_digits.str.len() > 5, raw_zip_digits, pzip),
+                    np.where(raw_zip_digits.str.len() > 5, raw_zip_digits,
+                             pzip),
                 ),
             ),
             index=df.index,
@@ -266,8 +309,12 @@ class NCESPrivateSchool(USEducation):
         comm_type_col = self._map_code_col(df["ucommtyp"], PSS_COMM_TYPE_MAP)
         orient_col = self._map_code_col(df["orient"], PSS_ORIENT_MAP)
 
-        logr_series = df[logr_col] if logr_col and logr_col in df.columns else pd.Series("", index=df.index)
-        higr_series = df[higr_col] if higr_col and higr_col in df.columns else pd.Series("", index=df.index)
+        logr_series = df[
+            logr_col] if logr_col and logr_col in df.columns else pd.Series(
+                "", index=df.index)
+        higr_series = df[
+            higr_col] if higr_col and higr_col in df.columns else pd.Series(
+                "", index=df.index)
 
         # Constituent item definitions for grade counts and subtotals.
         kg_items = [
@@ -395,31 +442,31 @@ class NCESPrivateSchool(USEducation):
             f"American Indian/Alaska Native Students [Private School] {school_year}":
                 self._format_int_col(df, "p310"),
             f"Percentage of American Indian/Alaska Native Students [Private School] {school_year}":
-                self._format_float_col(df, "p_indian"),
+                self._format_float_col(df, "p_indian", is_percentage=True),
             f"Asian or Asian/Pacific Islander Students [Private School] {school_year}":
                 self._format_int_col(df, "p316"),
             f"Percentage of Asian or Asian/Pacific Islander Students [Private School] {school_year}":
-                self._format_float_col(df, "p_asian"),
+                self._format_float_col(df, "p_asian", is_percentage=True),
             f"Hispanic Students [Private School] {school_year}":
                 self._format_int_col(df, "p320"),
             f"Percentage of Hispanic Students [Private School] {school_year}":
-                self._format_float_col(df, "p_hisp"),
+                self._format_float_col(df, "p_hisp", is_percentage=True),
             f"Black or African American Students [Private School] {school_year}":
                 self._format_int_col(df, "p325"),
             f"Percentage of Black Students [Private School] {school_year}":
-                self._format_float_col(df, "p_black"),
+                self._format_float_col(df, "p_black", is_percentage=True),
             f"White Students [Private School] {school_year}":
                 self._format_int_col(df, "p330"),
             f"Percentage of White Students [Private School] {school_year}":
-                self._format_float_col(df, "p_white"),
+                self._format_float_col(df, "p_white", is_percentage=True),
             f"Nat. Hawaiian or Other Pacific Isl. Students [Private School] {school_year}":
                 self._format_int_col(df, "p318"),
             f"Percentage of Nat. Hawaiian or Other Pacific Isl. Students [Private School] {school_year}":
-                self._format_float_col(df, "p_pacific"),
+                self._format_float_col(df, "p_pacific", is_percentage=True),
             f"Two or More Races Students [Private School] {school_year}":
                 self._format_int_col(df, "p332"),
             f"Percentage of Two or More Races Students [Private School] {school_year}":
-                self._format_float_col(df, "p_tr"),
+                self._format_float_col(df, "p_tr", is_percentage=True),
             f"Pupil/Teacher Ratio [Private School] {school_year}":
                 self._format_float_col(df, "sttch_rt"),
             f"Full-Time Equivalent (FTE) Teachers [Private School] {school_year}":
@@ -445,12 +492,17 @@ def main(argv):
         os.makedirs(input_path_base, exist_ok=True)
         input_files_to_process = []
         if os.path.exists(input_path_base):
-            for root, _, files in os.walk(input_path_base):
+            for root, dirs, files in os.walk(input_path_base):
+                dirs.sort()
                 for file_name in sorted(files):
                     fn_lower = file_name.lower()
-                    if fn_lower.endswith(".csv") and "pss" in fn_lower and not fn_lower.startswith("elsi_"):
+                    if fn_lower.endswith(
+                            ".csv"
+                    ) and "pss" in fn_lower and not fn_lower.startswith(
+                            "elsi_"):
                         input_files_to_process.append(
                             os.path.join(root, file_name))
+        input_files_to_process.sort()
 
         if not input_files_to_process:
             raise FileNotFoundError(
@@ -477,20 +529,20 @@ def main(argv):
                                    duplicate_csv_place, tmcf_path_place)
 
         if FLAGS.mode == 'place':
-            loader._generate_statvars = False
-            loader._generate_places = True
+            loader.set_generate_statvars_flag(False)
+            loader.set_generate_places_flag(True)
         elif FLAGS.mode == 'stats':
-            loader._generate_statvars = True
-            loader._generate_places = False
+            loader.set_generate_statvars_flag(True)
+            loader.set_generate_places_flag(False)
 
         loader.generate_csv()
         loader.generate_mcf()
         loader.generate_tmcf()
         logging.info("Main Method Completed For Private School")
     except Exception as e:
-        logging.fatal(
-            f"Error While Running Private School Process: {e}",
-            exc_info=True)
+        logging.fatal(f"Error While Running Private School Process: {e}",
+                      exc_info=True)
+        raise
 
 
 if __name__ == '__main__':

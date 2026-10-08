@@ -20,11 +20,13 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import pandas as pd
+
 # Ensure the process module can be imported
 MODULE_DIR = os.path.dirname(__file__)
 sys.path.insert(0, MODULE_DIR)
 # pylint: disable=wrong-import-position
-from config import ELSI_58_COLUMN_TEMPLATE
+from config import CSV_DUPLICATE_NAME, ELSI_58_COLUMN_TEMPLATE
 from process import NCESPrivateSchool
 # pylint: enable=wrong-import-position
 
@@ -49,16 +51,15 @@ class TestProcess(unittest.TestCase):
         tmp_dir = cls._tmp_dir.name
         cleaned_csv_file_path = os.path.join(
             tmp_dir, "us_nces_demographics_private_school.csv")
-        mcf_file_path = os.path.join(
-            tmp_dir, "us_nces_demographics_private_school.mcf")
+        mcf_file_path = os.path.join(tmp_dir,
+                                     "us_nces_demographics_private_school.mcf")
         tmcf_file_path = os.path.join(
             tmp_dir, "us_nces_demographics_private_school.tmcf")
-        csv_path_place = os.path.join(
-            tmp_dir, "us_nces_demographics_private_place.csv")
+        csv_path_place = os.path.join(tmp_dir,
+                                      "us_nces_demographics_private_place.csv")
         tmcf_path_place = os.path.join(
             tmp_dir, "us_nces_demographics_private_place.tmcf")
-        dup_csv_path_place = os.path.join(
-            tmp_dir, "dulicate_id_us_nces_demographics_private_place.csv")
+        dup_csv_path_place = os.path.join(tmp_dir, CSV_DUPLICATE_NAME)
 
         loader = NCESPrivateSchool(cls.ip_data, cleaned_csv_file_path,
                                    mcf_file_path, tmcf_file_path,
@@ -68,8 +69,7 @@ class TestProcess(unittest.TestCase):
         with patch(
                 "common.us_education.dc_api_is_defined_dcid",
                 side_effect=lambda nodes, *args, **kwargs:
-            {n: True
-             for n in nodes},
+            {n: True for n in nodes},
         ):
             loader.generate_csv()
             loader.generate_mcf()
@@ -152,9 +152,9 @@ class TestProcess(unittest.TestCase):
                 "F_P280", "P285", "P290", "F_P290", "P295", "P300", "F_P300",
                 "P305", "F_P305", "NUMSTUDS", "P310", "F_P310", "P_INDIAN",
                 "P316", "F_P316", "P_ASIAN", "P318", "F_P318", "P_PACIFIC",
-                "P320", "F_P320", "P_HISP", "P325", "F_P325", "P_BLACK",
-                "P330", "F_P330", "P_WHITE", "P332", "F_P332", "P_TR",
-                "NUMTEACH", "F_P410", "STTCH_RT"
+                "P320", "F_P320", "P_HISP", "P325", "F_P325", "P_BLACK", "P330",
+                "F_P330", "P_WHITE", "P332", "F_P332", "P_TR", "NUMTEACH",
+                "F_P410", "STTCH_RT"
             ]
             row1 = {
                 "PFNLWT": "1.0",
@@ -297,19 +297,17 @@ class TestProcess(unittest.TestCase):
             )
             elsi_df = loader.input_file_to_df(sample_pss_path)
             expected_cols = [
-                c.format(school_year="2019-20")
-                for c in ELSI_58_COLUMN_TEMPLATE
+                c.format(school_year="2019-20") for c in ELSI_58_COLUMN_TEMPLATE
             ]
             self.assertEqual(list(elsi_df.columns), expected_cols)
             self.assertEqual(
                 elsi_df.loc[0,
                             "ANSI/FIPS County Code [Private School] 2019-20"],
                 "01073")
-            self.assertEqual(
-                elsi_df.loc[0, "ZIP + 4 [Private School] 2019-20"],
-                "352031234")
-            self.assertEqual(
-                elsi_df.loc[1, "ZIP + 4 [Private School] 2019-20"], "35203")
+            self.assertEqual(elsi_df.loc[0, "ZIP + 4 [Private School] 2019-20"],
+                             "352031234")
+            self.assertEqual(elsi_df.loc[1, "ZIP + 4 [Private School] 2019-20"],
+                             "35203")
             self.assertEqual(
                 elsi_df.loc[0,
                             "School Community Type [Private School] 2019-20"],
@@ -327,8 +325,7 @@ class TestProcess(unittest.TestCase):
                 elsi_df.loc[0, "Grades 1-8 Students [Private School] 2019-20"],
                 "22")
             self.assertEqual(
-                elsi_df.loc[0,
-                            "Grades 9-12 Students [Private School] 2019-20"],
+                elsi_df.loc[0, "Grades 9-12 Students [Private School] 2019-20"],
                 "†")
             self.assertEqual(
                 elsi_df.loc[0, "Grade 9 Students [Private School] 2019-20"],
@@ -345,25 +342,161 @@ class TestProcess(unittest.TestCase):
                 elsi_df.loc[1, "School Type [Private School] 2019-20"],
                 "1-Regular Elementary or Secondary")
             self.assertEqual(
-                elsi_df.loc[1, "White Students [Private School] 2019-20"],
-                "27")
+                elsi_df.loc[1, "White Students [Private School] 2019-20"], "27")
             self.assertEqual(
                 elsi_df.loc[
-                    1,
-                    "Percentage of White Students [Private School] 2019-20"],
+                    1, "Percentage of White Students [Private School] 2019-20"],
                 "72.97")
 
             with patch(
                     "common.us_education.dc_api_is_defined_dcid",
                     side_effect=lambda nodes, *args, **kwargs:
-                {n: True
-                 for n in nodes},
+                {n: True for n in nodes},
             ):
                 loader.generate_csv()
                 loader.generate_mcf()
                 loader.generate_tmcf()
             self.assertTrue(os.path.exists(pss_out_csv))
             self.assertTrue(os.path.exists(pss_place_csv))
+
+    def test_race_percentage_over_100_filtered(self):
+        """Tests that race percentages > 100.0% from upstream anomalies are filtered as '†'."""
+        df = pd.DataFrame({
+            "p_asian": ["250.0", "50.5", "100.0", "100.01", ""],
+            "p_white": ["125.0", "0.0", "75.25", "-5.0", "88.88"],
+        })
+        s_asian = NCESPrivateSchool._format_float_col(df,
+                                                      "p_asian",
+                                                      is_percentage=True)
+        self.assertEqual(s_asian.tolist(), ["†", "50.5", "100.0", "†", "†"])
+
+        s_white = NCESPrivateSchool._format_float_col(df,
+                                                      "p_white",
+                                                      is_percentage=True)
+        self.assertEqual(s_white.tolist(), ["†", "0.0", "75.25", "†", "88.88"])
+
+        # Non-percentage columns (like pupil/teacher ratio) allow values > 100
+        df_ratio = pd.DataFrame({"sttch_rt": ["125.0", "250.0"]})
+        s_ratio = NCESPrivateSchool._format_float_col(df_ratio,
+                                                      "sttch_rt",
+                                                      is_percentage=False)
+        self.assertEqual(s_ratio.tolist(), ["125.0", "250.0"])
+
+    def test_mode_isolation(self):
+        """Tests that --mode=place and --mode=stats cleanly isolate outputs."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cleaned_csv = os.path.join(tmp_dir, "stats.csv")
+            mcf = os.path.join(tmp_dir, "stats.mcf")
+            tmcf = os.path.join(tmp_dir, "stats.tmcf")
+            place_csv = os.path.join(tmp_dir, "place.csv")
+            dup_csv = os.path.join(tmp_dir, "dup.csv")
+            place_tmcf = os.path.join(tmp_dir, "place.tmcf")
+
+            # Mode 'place': generates place outputs, skips stats outputs
+            place_loader = NCESPrivateSchool(self.ip_data, cleaned_csv, mcf,
+                                             tmcf, place_csv, dup_csv,
+                                             place_tmcf)
+            place_loader.set_generate_statvars_flag(False)
+            place_loader.set_generate_places_flag(True)
+
+            with patch("common.us_education.dc_api_is_defined_dcid",
+                       side_effect=lambda nodes, *args, **kwargs:
+                       {n: True for n in nodes}):
+                place_loader.generate_csv()
+                place_loader.generate_mcf()
+                place_loader.generate_tmcf()
+
+            self.assertTrue(os.path.exists(place_csv))
+            self.assertTrue(os.path.exists(place_tmcf))
+            self.assertFalse(os.path.exists(cleaned_csv))
+            self.assertFalse(os.path.exists(mcf))
+            self.assertFalse(os.path.exists(tmcf))
+
+            # Mode 'stats': generates stats outputs, skips place outputs
+            stats_cleaned_csv = os.path.join(tmp_dir, "stats_only.csv")
+            stats_mcf = os.path.join(tmp_dir, "stats_only.mcf")
+            stats_tmcf = os.path.join(tmp_dir, "stats_only.tmcf")
+            stats_place_csv = os.path.join(tmp_dir, "place_only.csv")
+            stats_dup_csv = os.path.join(tmp_dir, "dup_only.csv")
+            stats_place_tmcf = os.path.join(tmp_dir, "place_only.tmcf")
+
+            stats_loader = NCESPrivateSchool(self.ip_data, stats_cleaned_csv,
+                                             stats_mcf, stats_tmcf,
+                                             stats_place_csv, stats_dup_csv,
+                                             stats_place_tmcf)
+            stats_loader.set_generate_statvars_flag(True)
+            stats_loader.set_generate_places_flag(False)
+
+            with patch("common.us_education.dc_api_is_defined_dcid",
+                       side_effect=lambda nodes, *args, **kwargs:
+                       {n: True for n in nodes}):
+                stats_loader.generate_csv()
+                stats_loader.generate_mcf()
+                stats_loader.generate_tmcf()
+
+            self.assertTrue(os.path.exists(stats_cleaned_csv))
+            self.assertTrue(os.path.exists(stats_mcf))
+            self.assertTrue(os.path.exists(stats_tmcf))
+            self.assertFalse(os.path.exists(stats_place_csv))
+            self.assertFalse(os.path.exists(stats_place_tmcf))
+
+    def test_multi_year_place_coalescing(self):
+        """Tests that _transform_private_place coalesces non-null attributes across survey years."""
+        loader = NCESPrivateSchool([], "dummy.csv", "dummy.mcf", "dummy.tmcf",
+                                   "dummy_place.csv", "dummy_dup.csv",
+                                   "dummy_place.tmcf")
+
+        place_df_2019 = pd.DataFrame([{
+            "school_state_code": "nces/A0108845",
+            "year": 2019,
+            "Private_School_Name": "†",
+            "PhoneNumber": "",
+            "Physical_Address": "123 MAIN ST",
+            "City": "BIRMINGHAM",
+            "State_Abbr": "AL",
+            "ZIP": "35203",
+            "ZIP4": "352031234",
+            "County_code": "01073",
+            "State_code": "01",
+            "Lowest_Grade": "Prekindergarten",
+            "Highest_Grade": "8th grade",
+            "SchoolGrade": "1-Elementary",
+            "School_Type": "1-Regular Elementary or Secondary",
+            "School_Religion": "Roman Catholic",
+            "Coeducational": "1-Coed",
+        }])
+        place_df_1997 = pd.DataFrame([{
+            "school_state_code": "nces/A0108845",
+            "year": 1997,
+            "Private_School_Name": "ST PATRICK SCHOOL",
+            "PhoneNumber": "2055551234",
+            "Physical_Address": "",
+            "City": "BIRMINGHAM",
+            "State_Abbr": "AL",
+            "ZIP": "35203",
+            "ZIP4": "",
+            "County_code": "01073",
+            "State_code": "01",
+            "Lowest_Grade": "Prekindergarten",
+            "Highest_Grade": "8th grade",
+            "SchoolGrade": "1-Elementary",
+            "School_Type": "1-Regular Elementary or Secondary",
+            "School_Religion": "Roman Catholic",
+            "Coeducational": "1-Coed",
+        }])
+
+        loader._place_dfs = [place_df_2019, place_df_1997]
+        loader._transform_private_place()
+
+        res = loader._final_df_place
+        self.assertEqual(len(res), 1)
+        row = res.iloc[0]
+        # Restored name and phone from 1997 (title-cased by _transform_private_place)
+        self.assertEqual(row["Private_School_Name"], "St Patrick School")
+        self.assertEqual(row["PhoneNumber"], "2055551234")
+        # Retained address from 2019
+        self.assertIn("123 Main St", row["Physical_Address"])
+        self.assertFalse(row["Physical_Address"].startswith(" "))
 
 
 if __name__ == '__main__':

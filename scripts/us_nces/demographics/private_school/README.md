@@ -73,7 +73,6 @@ python3 -m unittest process_test.py
 ### Place Import (`--mode=place`)
 * **Cleaned Place CSV**: `gcs_folder/output_place/us_nces_demographics_private_place.csv` (~65.6K schools)
 * **Place Template MCF**: `gcs_folder/output_place/us_nces_demographics_private_place.tmcf`
-* **Provisional Node MCF**: [ProvisionalNodePlaces.mcf](ProvisionalNodePlaces.mcf) (Defines 5,421 provisional nodes for new 2021/2023 schools)
 
 ### Stats Import (`--mode=stats`)
 * **Observations CSV**: `gcs_folder/output_files/us_nces_demographics_private_school.csv` (~9.08M rows)
@@ -92,20 +91,39 @@ Population estimates categorized across:
 4. Full-Time Equivalent (FTE) Teachers.
 5. Pupil/Teacher Ratio.
 
-### Place Properties of Private Schools
-1. `School ID - NCES Assigned` (`dcid:nces/...`)
-2. `Private School Name`
-3. `Physical Address`, `City`, `State Abbr`, `ZIP`, `ZIP + 4`
-4. `ANSI/FIPS State Code` & `ANSI/FIPS County Code`
-5. `Phone Number`
-6. `Lowest Grade Taught` & `Highest Grade Taught`
-7. `School Level` (Elementary, Secondary, Combined)
-8. `School Type` (Regular, Montessori, Special Education, Alternative, etc.)
-9. `Coeducational` (Coed, All-female, All-male)
-10. `Religious Orientation` & `School's Religious Affiliation`
-11. `School Community Type` (City, Suburb, Town, Rural)
+### Place Properties of Private Schools (`dcs:PrivateSchool`)
+The place import (`NCES_PrivateSchool`) defines `dcs:PrivateSchool` entities with the following properties mapped in `us_nces_demographics_private_place.tmcf`:
+
+| Property | Description | Source ELSI Field | Example / Format |
+| :--- | :--- | :--- | :--- |
+| `dcid` | Unique Data Commons ID | `School ID - NCES Assigned` | `dcid:nces/00000033` |
+| `ncesId` | Canonical 8-character NCES ID | `School ID - NCES Assigned` | `00000033` |
+| `name` | Canonical school name | `Private School Name` | `ST JOHN LUTHERAN SCHOOL` |
+| `address` | Formatted street address | `Physical Address`, `City`, `State Abbr`, `ZIP`, `ZIP + 4` | `100 MAIN ST, BIRMINGHAM, AL, 35203` |
+| `containedInPlace` | County and State administrative places | `ANSI/FIPS County Code`, `ANSI/FIPS State Code` | `geoId/01073`, `geoId/01` |
+| `telephone` | Contact phone number | `Phone Number` | `2055551234` |
+| `lowestGrade` | Lowest grade offered | `Lowest Grade Taught` | `Prekindergarten`, `1st grade` |
+| `highestGrade` | Highest grade offered | `Highest Grade Taught` | `12th grade`, `8th grade` |
+| `schoolGradeLevel` | School level classification | `School Level` | `1-Elementary`, `2-Secondary`, `3-Combined` |
+| `educationalMethod` | School program/method type | `School Type` | `1-Regular Elementary or Secondary`, `2-Montessori` |
+| `religiousOrientation` | Specific religious denomination | `Religious Orientation` | `Roman Catholic`, `Baptist`, `Nonsectarian` |
+| `coeducationStatus` | Student gender enrollment status | `Coeducational` | `1-Coed`, `2-All-female`, `3-All-male` |
+
+> [!NOTE]
+> * **Latitude / Longitude**: Private schools in PSS do not emit `latitude` or `longitude` coordinates (unlike Public School and School District place imports).
+> * **Unmapped Intermediate Columns**: Intermediate survey columns `School's Religious Affiliation` (`relig`) and `School Community Type` (`ucommtyp`) are retained during data extraction for compatibility with the ELSI 58-column layout but are not mapped to Schema.org properties in `us_nces_demographics_private_place.tmcf`.
 
 ---
+
+## Upstream Data Anomalies & Normalization Handling
+
+### Student Race Percentage Denominator Discrepancy (> 100%)
+* **Upstream Phenomenon**: In earlier PSS survey waves (such as 2001–02 `PSS0102_PU.csv`), NCES reported race student counts (`p310`–`p332`) that included Pre-Kindergarten students (`p305`), whereas total student enrollment (`numstuds`) counted only Kindergarten through Grade 12 + Ungraded students.
+* **Impact**: For schools with substantial Pre-K enrollment and low K–12 enrollment, raw ratios and pre-computed percentages (`p_indian`, `p_asian`, `p_hisp`, `p_white`, `p_black`) exceeded 100.0% (up to 250.0%).
+* **Pipeline Remediation**: `process.py` validates race percentages via `_format_float_col(..., is_percentage=True)`. Any calculated or upstream percentage exceeding 100.0% is treated as invalid and mapped to the standard NCES missing data symbol (`"†"`). In addition, when computing `p_black = (p325 / numstuds) * 100` for 1997–2015 cycles, `process.py` validates `p325 <= numstuds` to ensure impossible percentages are not generated.
+
+---
+
 ### Running Tests
 
 Run the test cases
