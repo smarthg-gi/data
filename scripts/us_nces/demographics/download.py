@@ -49,8 +49,7 @@ import file_util
 
 _FLAGS = flags.FLAGS
 
-flags.DEFINE_enum("import_name", None,
-                  ["PublicSchool", "District"],
+flags.DEFINE_enum("import_name", None, ["PublicSchool", "District"],
                   "Import name for which input files to be downloaded")
 flags.DEFINE_list("years_to_download", None,
                   "Years for which file has to be downloaded")

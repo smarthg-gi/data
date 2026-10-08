@@ -485,8 +485,11 @@ class TestProcess(unittest.TestCase):
             "Coeducational": "1-Coed",
         }])
 
-        loader._place_dfs = [place_df_2019, place_df_1997]
-        loader._transform_private_place()
+        with patch("common.us_education.dc_api_is_defined_dcid",
+                   side_effect=lambda nodes, *args, **kwargs:
+                   {n: True for n in nodes}):
+            loader._place_dfs = [place_df_2019, place_df_1997]
+            loader._transform_private_place()
 
         res = loader._final_df_place
         self.assertEqual(len(res), 1)
