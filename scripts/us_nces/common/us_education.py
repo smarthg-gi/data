@@ -426,29 +426,62 @@ class USEducation:
         if self._place_dfs:
             self._final_df_place = pd.concat(self._place_dfs, ignore_index=True)
             self._place_dfs = []
+        self._final_df_place = self._final_df_place.copy()
+
         # Renaming column names in the dataframe.
         self._final_df_place = self._final_df_place.rename(
             columns=self._renaming_columns)
+
+        # In non-enum place columns, '†' and '–' represent missing data rather than
+        # a categorical enum. Replace them with np.nan so they do not shadow valid values.
+        enum_cols = {
+            "School_Type", "School_Religion", "Coeducational", "Lowest_Grade",
+            "Highest_Grade", "SchoolGrade"
+        }
+        non_enum_cols = [
+            c for c in self._final_df_place.columns if c not in enum_cols
+        ]
+        self._final_df_place[non_enum_cols] = self._final_df_place[
+            non_enum_cols].replace({
+                '†': np.nan,
+                '–': np.nan,
+                '‡': np.nan
+            })
+
+        # Ensure empty strings or whitespace entries are treated as NaN so that
+        # groupby().first() accurately skips nulls across years.
+        self._final_df_place.replace([r'^\s*$', r'^nan$', r'^None$', r'^<NA>$'],
+                                     np.nan,
+                                     regex=True,
+                                     inplace=True)
+
+        orig_cols = self._final_df_place.columns.tolist()
+        # Coalesce across school years, preferring latest year per column,
+        # falling back to earlier years only if NaN.
+        self._final_df_place = (self._final_df_place.sort_values(
+            by=["year"],
+            ascending=False).groupby("school_state_code",
+                                     as_index=False,
+                                     sort=False).first()[orig_cols])
+
+        self._final_df_place = self._final_df_place.fillna('')
+
         # Filling zip and county numbers upto 5 digits and adding prefixes.
         self._final_df_place['ZIP'] = self._final_df_place['ZIP'].astype(
-            str).str.zfill(5)
-        self._final_df_place['ZIP'] = "zip/" + self._final_df_place['ZIP']
+            str).apply(lambda x: _format_fips_code(x, 5) if x != '' else '')
+        self._final_df_place['ZIP'] = self._final_df_place['ZIP'].apply(
+            lambda x: 'zip/' + x if x != '' else '')
         self._final_df_place['County_code'] = self._final_df_place[
-            'County_code'].astype(str).str.zfill(5)
+            'County_code'].astype(str).apply(lambda x: _format_fips_code(x, 5)
+                                             if x != '' else '')
         self._final_df_place['County_code'] = self._final_df_place[
             'County_code'].apply(lambda x: 'geoId/' + x if x != '' else '')
-        self._final_df_place[
-            'State_code'] = "geoId/" + self._final_df_place['State_code']
-
-        def add_leading_zero(text):
-            parts = text.split('/')
-            if len(parts) == 2 and len(parts[1]) == 1:
-                return f"{parts[0]}/0{parts[1]}"
-            else:
-                return text
-
         self._final_df_place['State_code'] = self._final_df_place[
-            'State_code'].apply(add_leading_zero)
+            'State_code'].astype(str).apply(lambda x: _format_fips_code(x, 2)
+                                            if x != '' else '')
+        self._final_df_place['State_code'] = self._final_df_place[
+            'State_code'].apply(lambda x: 'geoId/' + x if x != '' else '')
+
         # Renaming the property values according to DataCommons.
         self._final_df_place = replace_values(self._final_df_place,
                                               replace_with_all_mappers=False,
@@ -458,14 +491,23 @@ class USEducation:
             (self._final_df_place["ZIP4"].str[:5] + '-' +
              self._final_df_place["ZIP4"].str[5:]),
             (self._final_df_place["ZIP4"]))
-        self._final_df_place["Physical_Address"] = self._final_df_place[
-            "Physical_Address"].astype(
-                str) + " " + self._final_df_place["City"].astype(str)
-        self._final_df_place["Physical_Address"] = self._final_df_place[
-            "Physical_Address"].str.title()
-        self._final_df_place["Physical_Address"] = self._final_df_place[
-            "Physical_Address"].astype(str) + " " + self._final_df_place[
-                'State_Abbr'] + " " + self._final_df_place["ZIP4"].astype(str)
+
+        # Construct Physical_Address without leading space bug
+        street = self._final_df_place["Physical_Address"].astype(
+            str).str.strip()
+        city = self._final_df_place["City"].astype(str).str.strip().str.title()
+        state = self._final_df_place["State_Abbr"].astype(str).str.strip()
+        zip4 = self._final_df_place["ZIP4"].astype(str).str.strip()
+
+        self._final_df_place["Physical_Address"] = np.where(
+            street != "",
+            street.str.title() + " " + city + " " + state + " " + zip4,
+            city + " " + state + " " + zip4)
+        self._final_df_place["Physical_Address"] = (
+            self._final_df_place["Physical_Address"].str.replace(
+                "Po Box", "PO Box").str.replace(r"\s+", " ",
+                                                regex=True).str.strip())
+
         # List of columns to be considered under 'dcs'
         col_to_dcs = [
             "School_Type", "School_Religion", "Coeducational", "Lowest_Grade",
@@ -497,19 +539,11 @@ class USEducation:
                         ) + self._final_df_place['County_code'].apply(
                             lambda x: x + ',' if x != '' else ''
                         ) + self._final_df_place['State_code']
-        # Camel casing Physical Address and School Name.
 
-        self._final_df_place["Physical_Address"] = self._final_df_place[
-            "Physical_Address"].str.replace("Po Box", "PO Box")
         self._final_df_place["Private_School_Name"] = np.where(
             self._final_df_place["Private_School_Name"].str.len() <= 4,
             self._final_df_place["Private_School_Name"],
             self._final_df_place["Private_School_Name"].str.title())
-        # Sorting values in descending order and dropping duplicates.
-        self._final_df_place = self._final_df_place.sort_values(by=["year"],
-                                                                ascending=False)
-        self._final_df_place = self._final_df_place.drop_duplicates(
-            subset=["school_state_code"]).reset_index(drop=True)
 
     @log_method_execution
     def _transform_public_place(self):

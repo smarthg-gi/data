@@ -13,7 +13,7 @@ This dataset has Population Estimates for the National Center for Education Stat
 ## Source Data Availability: P1Y 
   
 ## Autorefresh Type: Semi-Autorefresh 
-  - `/bin/python3 download.py --import_name={"District"(or)"PublicSchool"} --years_to_download= "{select the available years       mentioned under each school type}"`
+  - `/bin/python3 download.py --import_name={"District"(or)"PublicSchool"} --years_to_download= "{select the available years mentioned under each school type}"`
 
    For Example:  `/bin/python3 download.py --import_name="PublicSchool" --years_to_download="2023"`.
     - The input_files folder containing all the files will be present in: 
@@ -62,9 +62,6 @@ NCES_SchoolDistrict (Place) ─────────► NCES_SchoolDistrictSt
                                  └───► NCES_PublicSchool (Place) ───────────────► NCES_PublicSchoolStats (Stats)
                                        (Defines: dcid:nces/... [Public])          (Refs: observationAbout: dcs:nces/...)
                                        (Refs: schoolDistrict: dcs:geoId/sch...)
-
-NCES_PrivateSchool (Place) ──────────► NCES_PrivateSchoolStats (Stats)
-(Defines: dcid:nces/... [Private])     (Refs: observationAbout: dcs:nces/...)
 ```
 
 #### Staggered Quarterly Cron Schedule (`manifest.json`)
@@ -72,10 +69,8 @@ NCES_PrivateSchool (Place) ──────────► NCES_PrivateSchoolS
 | Execution Tier | Import Name | Domain | Manifest Path | Staggered `cron_schedule` |
 | :--- | :--- | :--- | :--- | :--- |
 | **Tier 1 (Week 1, Day 3)** | `NCES_SchoolDistrict` | School District (Place) | `school_district/manifest.json` | `"30 3 3 3,6,9,12 *"` |
-| **Tier 1 (Week 1, Day 3)** | `NCES_PrivateSchool` | Private School (Place) | `private_school/manifest.json` | `"30 4 3 3,6,9,12 *"` |
 | **Tier 2 (Week 2, Day 10)** | `NCES_SchoolDistrictStats` | School District (Stats) | `school_district/manifest.json` | `"30 3 10 3,6,9,12 *"` |
 | **Tier 2 (Week 2, Day 10)** | `NCES_PublicSchool` | Public School (Place) | `public_school/manifest.json` | `"30 5 10 3,6,9,12 *"` |
-| **Tier 2 (Week 2, Day 10)** | `NCES_PrivateSchoolStats` | Private School (Stats)* | `private_school/manifest.json` | `"30 7 10 3,6,9,12 *"` |
 | **Tier 3 (Week 3, Day 17)** | `NCES_PublicSchoolStats` | Public School (Stats) | `public_school/manifest.json` | `"30 3 17 3,6,9,12 *"` |
 
 ---
@@ -112,12 +107,10 @@ python3 -m tools.differ.data_differ \
 
 #### Cleaned Data
     import_name consists of the school name being used 
-    - "private_school"
     - "school_district"
     - "public_school"
 
 Cleaned data will be saved as a CSV file within the following paths.
-- private_school -> [private_school/output_files/us_nces_demographics_private_school.csv]
 - district_school -> [school_district/output_files/us_nces_demographics_district_school.csv]
 - public_school -> [public_school/output_files/us_nces_demographics_public_school.csv]
 
@@ -133,7 +126,7 @@ The Columns for the csv files are as follows
 If it's the beginning of a new year:
 -The script downloads the latest data using Selenium.
 Otherwise:
--The script retrieves school IDs for Private, Public, and District schools from a local JSON file located at gs://datcom-prod-imports/scripts/us_nces/demographics/school_id_list.json.
+-The script retrieves school IDs for Public and District schools from a local JSON file located at gs://datcom-prod-imports/scripts/us_nces/demographics/school_id_list.json.
 
 The population is categorized on various attributes and their combinations:
         
@@ -223,10 +216,6 @@ The attributes used for the import are as follows
      - The download.py script is the main script. It considers the import_name and year to be downloaded. It downloads, extracts and places the input csv in "input_files" folder under the desired school directory.
 
 #### MCFs and Template MCFs
-- private_school -> [private_school/gcs_folder/output_files/us_nces_demographics_private_school.mcf]
-                    [private_school/gcs_folder/output_files/us_nces_demographics_private_school.tmcf]
-
-
 - district_school -> [school_district/gcs_folder/output_files/us_nces_demographics_district_school.mcf],
                      [school_district/gcs_folder/output_files/us_nces_demographics_district_school.tmcf]
 
@@ -237,7 +226,6 @@ The attributes used for the import are as follows
 
 #### Cleaned Place
 "import_name" consists the type of school being executed. 
-- "private_school"
 - "district_school"
 - "public_school"
 
@@ -245,8 +233,6 @@ The attributes used for the import are as follows
 #### Follow these steps to generate and add new schools 
 Cleaned data will be inside as a CSV file with the following paths.
 step 1 :
-- private_school:
-[private_school/gcs_folder/output_place/us_nces_demographics_private_place.csv]
 - district_school:
 [school_district/gcs_folder/output_place/us_nces_demographics_district_place.csv]
 - public_school:
@@ -256,18 +242,15 @@ step 2 : Use the command-line tool to do genmcf using the CSV and TMCF files.
 
 `java -jar <path_to_datacommons_import_tool>/datacommons-import-tool-jar-with-dependencies.jar genmcf -r FULL <place csv path> <place tmcf path>`
 
-step 3 : Update the file path in the textproto files for NCES_PrivateSchool, NCES_PublicSchool, and NCES_SchoolDistrict.
+step 3 : Update the file path in the textproto files for NCES_PublicSchool and NCES_SchoolDistrict.
 
 
 If there are Duplicate School IDs present in School Place, they will be saved inside the same output path as that of csv and tmcf file.
-- [scripts/us_nces/demographics/private_school/gcs_folder/output_place/dulicate_id_us_nces_demographics_private_place.csv]
 - [scripts/us_nces/demographics/school_district/gcs_folder/output_place/dulicate_id_us_nces_demographics_district_place.csv]
 - [scripts/us_nces/demographics/public_school/gcs_folder/output_place/dulicate_id_us_nces_demographics_public_place.csv]
 
 
 #### Template MCFs Place
-- private_school:
-[private_school/gcs_folder/output_place/us_nces_demographics_private_place.tmcf]
 - district_school:
 [school_district/gcs_folder/output_place/us_nces_demographics_district_place.tmcf]
 - public_school:
@@ -277,7 +260,6 @@ If there are Duplicate School IDs present in School Place, they will be saved in
 
 Run the test cases
 
-- `python3 -m unittest scripts/us_nces/demographics/private_school/process_test.py`
 - `python3 -m unittest scripts/us_nces/demographics/school_district/process_test.py`
 - `python3 -m unittest scripts/us_nces/demographics/public_school/process_test.py`
 
