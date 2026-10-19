@@ -1,11 +1,8 @@
 # US: National Center for Education Statistics
 ## Import Overview:
-This dataset has Population Estimates for the National Center for Education Statistics in US for:
-- School District
-- Public Schools
-
-> [!NOTE]
-> Private School is maintained as an independent import pipeline. See [demographics/private_school/README.md].
+This dataset has Population Estimates for the National Center for Education Statistics in US for 
+- School District - 2010-11 to 2024-25
+- Public Schools - 2010-11 to 2024-25
 
 ## Source URL:
   https://nces.ed.gov/ccd/elsi/tableGenerator.aspx 
@@ -26,15 +23,15 @@ This dataset has Population Estimates for the National Center for Education Stat
  
 ### upload the files manually to GCP bucket for processing using gsutil command.
     Ex public :
-        gsutil cp -r /scripts/us_nces/demographics/public_school/input_files gs://unresolved_mcf/us_nces/demographics/public_school/semi_automation_input_files/
+        gcloud storage cp --recursive /scripts/us_nces/demographics/public_school/input_files gs://unresolved_mcf/us_nces/demographics/public_school/semi_automation_input_files/
     Ex district :
-        gsutil cp -r /scripts/us_nces/demographics/school_district/input_files gs://unresolved_mcf/us_nces/demographics/school_district/semi_automation_input_files/
+        gcloud storage cp --recursive /scripts/us_nces/demographics/school_district/input_files gs://unresolved_mcf/us_nces/demographics/school_district/semi_automation_input_files/
 
 ### Note:
     The only manual part here is after downloading the input files and then uploading them to gcp bucket. Once they're uploaded, Each import requires its own sh command to copy the files from Google Cloud to a local folder called gcs_folder/input_files. From there, a script automatically picks up these files to process them. Finally, it generates the output and saves it in gcs_folder/output_files
 
 ### Script Execution Details
-Each domain's `process.py` supports the `--mode` flag (`place`, `stats`, or `all`, default: `all`):
+`public_school/process.py` and `school_district/process.py` support the `--mode` flag (`place`, `stats`, or `all`, default: `all`):
 
 ```bash
 # Public School
@@ -76,6 +73,37 @@ NCES_SchoolDistrict (Place) ─────────► NCES_SchoolDistrictSt
 | **Tier 2 (Week 2, Day 10)** | `NCES_PublicSchool` | Public School (Place) | `public_school/manifest.json` | `"30 5 10 3,6,9,12 *"` |
 | **Tier 3 (Week 3, Day 17)** | `NCES_PublicSchoolStats` | Public School (Stats) | `public_school/manifest.json` | `"30 3 17 3,6,9,12 *"` |
 
+---
+
+### High-Scale Differ & Validation Configuration (`NCES_PublicSchoolStats`)
+
+#### 1. What the Differ Issue Is & Why It Happens
+- **Dataset Scale**: `NCES_PublicSchoolStats` spans 15+ years across ~123,500 public schools and 198 StatisticalVariables, generating **238+ million `StatVarObservation` nodes** (~17 GB cleaned CSV and 120+ GB of resolved MCF).
+- **Single-VM Memory Bottleneck**: The standard in-process differ invoked by the Cloud Batch import executor runs on a single Cloud Batch VM and loads both the previous production MCF and current run MCF into memory concurrently. At 238M+ observations, differ execution runs out of memory (OOM) during the `DIFFER` stage.
+- **Configuration Decoupling**:
+  - In `public_school/manifest.json`, `NCES_PublicSchoolStats` sets `"config_override": {"invoke_differ_tool": false}` so the Cloud Batch job skips the in-process differ and completes `GENMCF` and SQL validation (`check_max_date_consistent`, `check_max_date_freshness`) cleanly.
+  - In `public_school/validation_config.json`, `"check_deleted_records_percent"` is set to `"enabled": false` because it depends on `differ_summary.json` from the in-process differ.
+
+#### 2. How to Run the Differ for `NCES_PublicSchoolStats` in Future Refreshes for test runs (Cloud Dataflow)
+For `NCES_PublicSchoolStats` (or any high-scale refresh that exceeds single-VM memory), run the differ externally on **Cloud Dataflow**.
+
+##### Running via Python `tools.differ.data_differ` (`DataflowRunner`)
+```bash
+python3 -m tools.differ.data_differ \
+    --runner=DataflowRunner \
+    --project=datcom-infosys-dev \
+    --region=us-central1 \
+    --temp_location="${STAGING_DIR}" \
+    --staging_location="${STAGING_DIR}" \
+    --job_name="nces-publicschoolstats-differ-highmem-$(date +%Y%m%d-%H%M%S)" \
+    --worker_machine_type=n2-highmem-16 \
+    --num_workers=10 \
+    --max_num_workers=100 \
+    --experiments=use_runner_v2 \
+    --existing_mcf_path="${OLD_RUN}/*.mcf" \
+    --new_mcf_path="${NEW_RUN}/*.mcf" \
+    --output_path="${DIFF_OUT}"
+```
 
 #### Cleaned Data
     import_name consists of the school name being used 
